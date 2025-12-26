@@ -1,4 +1,6 @@
 import subprocess
+import re
+import os
 
 def download_spotify_track(spotify_url: str, output_path: str) -> None:
     try:
@@ -20,12 +22,22 @@ def download_spotify_track(spotify_url: str, output_path: str) -> None:
 def download_spotify_playlist(spotify_url: str, output_path: str) -> None:
     try:
         print(f"Downloading playlist from {spotify_url} as MP3...")
+
+        # playlist name is id from url
+        playlist_name = spotify_url.split('/playlist/')[-1].split('?')[0]
+
+        # check if folder already exists in output_path
+        playlist_path = os.path.join(output_path, playlist_name)
+        if os.path.exists(playlist_path):
+            print(f"Playlist folder '{playlist_name}' already exists. Skipping download.")
+            return
+
         subprocess.run([
             "spotdl",
             "download",
             spotify_url,
             "--output",
-            f"{output_path}/",
+            f"{output_path}/{playlist_name}",
             "--format",
             "mp3"
         ], check=True)
@@ -36,12 +48,22 @@ def download_spotify_playlist(spotify_url: str, output_path: str) -> None:
 def download_spotify_album(spotify_url: str, output_path: str) -> None:
     try:
         print(f"Downloading album from {spotify_url} as MP3...")
+
+        # album name is id from url
+        album_name = spotify_url.split('/album/')[-1].split('?')[0]
+
+        # check if folder already exists in output_path
+        album_path = os.path.join(output_path, album_name)
+        if os.path.exists(album_path):
+            print(f"Album folder '{album_name}' already exists. Skipping download.")
+            return
+
         subprocess.run([
             "spotdl",
             "download",
             spotify_url,
             "--output",
-            f"{output_path}/",
+            f"{output_path}/{album_name}",
             "--format",
             "mp3"
         ], check=True)
