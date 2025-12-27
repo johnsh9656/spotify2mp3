@@ -1,15 +1,17 @@
-import subprocess
 import re
 import os
 import spotipy
 import spotipy.oauth2 as oauth2
-import yt_dlp
 import configparser
-from pathlib import Path
 import csv
 import time
 import shutil
 from yt_dlp import YoutubeDL
+import tempfile
+from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, COMM
+from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4
+
 
 # settings
 transcode_mp3 = True
@@ -23,6 +25,75 @@ def safe_filename(name: str, max_len: int = 120) -> str:
     return name[:max_len].rstrip(' .')
 
 SPOTIFY_RE = re.compile(r"open\.spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", re.IGNORECASE)
+
+def tag_audio_file(file_path: str, meta: dict):
+    title = (meta.get("Track Name") or "").strip()
+    artists = [a.strip() for a in (meta.get("Artist Name(s)") or "").split(";") if a.strip()]
+    album = (meta.get("Album Name") or "").strip()
+    album_artists = [a.strip() for a in (meta.get("Album Artist(s)") or "").split(";") if a.strip()]
+
+    release_date = (meta.get("Release Date") or "").strip()
+    track_number = (meta.get("Track Number") or "").strip()
+    disc_number = (meta.get("Disc Number") or "").strip()
+
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".mp3":
+        audio = MP3(file_path, ID3=ID3)
+        if audio.tags is None:
+            audio.add_tags()
+
+        # wipe relevant frames so YouTube junk doesn't linger
+        for key in ("TIT2","TPE1","TPE2","TALB","TRCK","TPOS","TDRC","COMM"):
+            audio.tags.delall(key)
+
+        if title:
+            audio.tags.add(TIT2(encoding=3, text=title))
+        if artists:
+            audio.tags.add(TPE1(encoding=3, text=artists))          # Contributing artists
+        if album_artists:
+            audio.tags.add(TPE2(encoding=3, text=album_artists))    # Album artist (Windows reads this)
+        if album:
+            audio.tags.add(TALB(encoding=3, text=album))
+        if track_number:
+            audio.tags.add(TRCK(encoding=3, text=track_number))
+        if disc_number:
+            audio.tags.add(TPOS(encoding=3, text=disc_number))
+        if release_date:
+            audio.tags.add(TDRC(encoding=3, text=release_date[:4]))         # keep just year for sanity
+
+        # Optional: store source URL in Comments so you can trace it
+        yt_url = (meta.get("YouTube URL") or "").strip()
+        if yt_url:
+            audio.tags.add(COMM(encoding=3, lang="eng", desc="Comment", text=yt_url))
+
+        audio.save(v2_version=3)  # ID3v2.3 = best compatibility
+    elif ext in (".m4a", ".mp4"):
+        audio = MP4(file_path)
+        if title: audio["\xa9nam"] = [title]
+        if artists: audio["\xa9ART"] = artists
+        if album: audio["\xa9alb"] = [album]
+        if album_artists: audio["aART"] = album_artists  # album artist
+        if release_date: audio["\xa9day"] = [release_date]
+        if track_number:
+            try:
+                audio["trkn"] = [(int(track_number), 0)]
+            except ValueError:
+                pass
+        if disc_number:
+            try:
+                audio["disk"] = [(int(disc_number), 0)]
+            except ValueError:
+                pass
+        audio.save()
+
+def find_downloaded_audio(output_dir: str, base_prefix: str):
+    candidates = []
+    for fn in os.listdir(output_dir):
+        if fn.startswith(base_prefix) and fn.lower().endswith((".mp3", ".m4a")):
+            candidates.append(os.path.join(output_dir, fn))
+    return max(candidates, key=os.path.getmtime) if candidates else None
+
 
 def parse_spotify_url(url: str):
     m = SPOTIFY_RE.search(url)
@@ -38,14 +109,14 @@ def handle_spotify_track(spotify, track_id):
     track_info = {
         'title': track['name'],
         'artists': [a['name'] for a in track['artists']],
-        'album': track['album']['name'],
+        'album_title': track['album']['name'],
         'duration_ms': track['duration_ms'],
         'explicit': track['explicit'],
         'spotify_id': track['id'],
         'spotify_uri': track['uri'],
         'spotify_url': track['external_urls']['spotify'],
         'isrc': track.get('external_ids', {}).get('isrc'),
-        'album': {
+        'album_info': {
             'spotify_id': album['id'],
             'spotify_uri': album['uri'],
             'spotify_url': album['external_urls']['spotify'],
@@ -57,15 +128,12 @@ def handle_spotify_track(spotify, track_id):
     }
     return track_info
 
-def handle_spotify_album(spotify, album_id):
+def handle_spotify_album(spotify, album_id, output_path="output"):
     album = spotify.album(album_id)
     album_title = album['name']
-
     album_artists = [a['name'] for a in album['artists']]
     release_date = album['release_date']
-    total_tracks = album['total_tracks']
     images = album['images']
-    album_url = album['external_urls']['spotify']
 
     # pagination, spotify returns max 50 trackers per request
     tracks = []
@@ -82,38 +150,64 @@ def handle_spotify_album(spotify, album_id):
             'title': t['name'],
             'artists': [a['name'] for a in t['artists']],
             'duration_ms': t['duration_ms'],
-            'explicit': t['explicit'],
             'spotify_id': t['id'],
-            'spotify_url': t['external_urls']['spotify']
+            'spotify_url': t['external_urls']['spotify'],
         })
     
-    csv_path = safe_filename(f".{album_title}_tracklist.csv")
-    write_tracklist_csv(csv_path, album_title, album_tracks)
-    convert_playlist(csv_path, "C:/Users/harri/Documents/playlist-maker/test_output", album_title)
+    fd, csv_path = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
 
-def write_tracklist_csv(csv_path, list_title, list_tracks):
+    try:
+        write_tracklist_csv(csv_path, album_title, album_tracks, album_artists, release_date)
+        convert_playlist(csv_path, output_path, album_title)
+    finally:
+        # delete temp csv file
+        try:
+            if os.path.exists(csv_path):
+                os.remove(csv_path)
+        except Exception as e:
+            print(f"Warning: could not delete temporary file {csv_path}: {e}")
+
+
+def write_tracklist_csv(csv_path, list_title, list_tracks, tracklist_artists, release_date):
     fieldnames = [
         "Track Name",
         "Artist Name(s)",
         "Album Name",
+        "Album Artist(s)",
+        "Tracklist Name",
+        "Tracklist Artist(s)",
+        "Release Date",
         "Duration (ms)",
+        "Disc Number",
         "Track Number",
         "Spotify Track ID",
         "Spotify Track URL",
     ]
 
     tracks_sorted = sorted(list_tracks, key=lambda x: (x["disc_number"], x["track_number"]))
+    tracklist_artists_str = "; ".join(tracklist_artists or [])
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
 
         for t in tracks_sorted:
+            album_obj = t.get("album") or {}
+            album_name = album_obj.get("name") or list_title
+            album_artists = album_obj.get("artists") or (tracklist_artists or [])
+            album_artists_str = "; ".join(album_artists)
+
             w.writerow({
                 "Track Name": t["title"],
                 "Artist Name(s)": "; ".join(t["artists"]),
-                "Album Name": list_title,
+                "Album Name": album_name,
+                "Album Artist(s)": album_artists_str,
+                "Tracklist Name": list_title,
+                "Tracklist Artist(s)": tracklist_artists_str,
+                "Release Date": album_obj.get("release_date") or release_date or "",
                 "Duration (ms)": t["duration_ms"],
+                "Disc Number": t["disc_number"],
                 "Track Number": t["track_number"],
                 "Spotify Track ID": t["spotify_id"],
                 "Spotify Track URL": t["spotify_url"],
@@ -135,9 +229,6 @@ def convert_playlist(csv_path, output_path, tracklist_name):
     
     start_time = time.time()
     output_dir = os.path.join(output_path, safe_filename(tracklist_name))
-    if os.path.exists(output_dir):
-        print(f"Output directory '{output_dir}' already exists. Skipping download.")
-        return
     os.makedirs(output_dir, exist_ok=True)
     last_output_dir = output_dir
 
@@ -168,11 +259,13 @@ def convert_playlist(csv_path, output_path, tracklist_name):
                 "download_archive": archive_file,
                 "format": "bestaudio[ext=m4a]/bestaudio/best",
                 "outtmpl": outtmpl,
+                
+                "no_warnings": True,
             }
             if mp3:
                 opts["postprocessors"] = [
                     {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
-                    {"key": "FFmpegMetadata"},
+                    #{"key": "FFmpegMetadata"},
                 ]
             else:
                 # keep as m4a where possible (remux)
@@ -234,6 +327,10 @@ def convert_playlist(csv_path, output_path, tracklist_name):
                         
                         # download
                         ydl.download([info['webpage_url']])
+                        final_path = find_downloaded_audio(output_dir, base)
+                        if not final_path:
+                            raise RuntimeError("Downloaded file not found after download.")
+                        tag_audio_file(final_path, row)
                         print(f"    Downloaded: {info.get('title')}")
                         downloaded.append({'Track Name': track_name, 'Artist Name(s)': artist_primary, 'Album Name': album, 'Track Number': i})
                         success = True
@@ -289,6 +386,6 @@ if __name__ == "__main__":
         #download_spotify_playlist(spotify_url, output_path)
         print("Playlist download not implemented yet.")
     elif content_type == "album":
-        handle_spotify_album(spotify, spotify_id)
+        handle_spotify_album(spotify, spotify_id, output_path)
     
     
