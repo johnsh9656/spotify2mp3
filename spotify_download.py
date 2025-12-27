@@ -8,7 +8,7 @@ import time
 import shutil
 from yt_dlp import YoutubeDL
 import tempfile
-from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, COMM
+from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, COMM, TCON
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
@@ -26,6 +26,26 @@ def safe_filename(name: str, max_len: int = 120) -> str:
 
 SPOTIFY_RE = re.compile(r"open\.spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", re.IGNORECASE)
 
+artist_genre_cache = {}
+def get_primary_genre(spotify, artist_id: str) -> str:
+    cached = artist_genre_cache.get(artist_id)
+    if cached is not None:
+        return cached[0] if cached else ""
+    try:
+        artist = spotify.artist(artist_id)
+        genres = artist.get("genres", [])
+        if not isinstance(genres, list):
+            genres = []
+        genres = [genre.capitalize() for genre in genres]
+            
+        artist_genre_cache[artist_id] = genres
+
+        print(f"Fetched genres for artist {artist_id}: {genres}")
+        return genres[0] if genres else ""
+    except Exception:
+        artist_genre_cache[artist_id] = []
+        return ""
+
 def tag_audio_file(file_path: str, meta: dict):
     title = (meta.get("Track Name") or "").strip()
     artists = [a.strip() for a in (meta.get("Artist Name(s)") or "").split(";") if a.strip()]
@@ -35,32 +55,35 @@ def tag_audio_file(file_path: str, meta: dict):
     release_date = (meta.get("Release Date") or "").strip()
     track_number = (meta.get("Track Number") or "").strip()
     disc_number = (meta.get("Disc Number") or "").strip()
+    genre = (meta.get("Genre") or "").strip()
 
     ext = os.path.splitext(file_path)[1].lower()
 
     if ext == ".mp3":
         audio = MP3(file_path, ID3=ID3)
-        if audio.tags is None:
-            audio.add_tags()
+        # if audio.tags is None:
+        #     audio.add_tags()
 
-        # wipe relevant frames so YouTube junk doesn't linger
-        for key in ("TIT2","TPE1","TPE2","TALB","TRCK","TPOS","TDRC","COMM"):
-            audio.tags.delall(key)
+        # # wipe relevant frames so YouTube junk doesn't linger
+        # for key in ("TIT2","TPE1","TPE2","TALB","TRCK","TPOS","TDRC","COMM"):
+        #     audio.tags.delall(key)
 
         if title:
             audio.tags.add(TIT2(encoding=3, text=title))
-        if artists:
-            audio.tags.add(TPE1(encoding=3, text=artists))          # Contributing artists
-        if album_artists:
-            audio.tags.add(TPE2(encoding=3, text=album_artists))    # Album artist (Windows reads this)
+        if artists:         # contributing artists
+            audio.tags.add(TPE1(encoding=3, text=artists))
+        if album_artists:   # album artist
+            audio.tags.add(TPE2(encoding=3, text=album_artists))
         if album:
             audio.tags.add(TALB(encoding=3, text=album))
         if track_number:
             audio.tags.add(TRCK(encoding=3, text=track_number))
         if disc_number:
             audio.tags.add(TPOS(encoding=3, text=disc_number))
-        if release_date:
-            audio.tags.add(TDRC(encoding=3, text=release_date[:4]))         # keep just year for sanity
+        if release_date:     # release year
+            audio.tags.add(TDRC(encoding=3, text=release_date[:4]))  
+        if genre:
+            audio.tags.add(TCON(encoding=3, text=genre))
 
         # Optional: store source URL in Comments so you can trace it
         yt_url = (meta.get("YouTube URL") or "").strip()
@@ -85,6 +108,7 @@ def tag_audio_file(file_path: str, meta: dict):
                 audio["disk"] = [(int(disc_number), 0)]
             except ValueError:
                 pass
+        if genre: audio["\xa9gen"] = [genre]
         audio.save()
 
 def find_downloaded_audio(output_dir: str, base_prefix: str):
@@ -149,6 +173,7 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
             'disc_number': t['disc_number'],
             'title': t['name'],
             'artists': [a['name'] for a in t['artists']],
+            'artists_ids': [a['id'] for a in t['artists']],
             'duration_ms': t['duration_ms'],
             'spotify_id': t['id'],
             'spotify_url': t['external_urls']['spotify'],
@@ -173,6 +198,7 @@ def write_tracklist_csv(csv_path, list_title, list_tracks, tracklist_artists, re
     fieldnames = [
         "Track Name",
         "Artist Name(s)",
+        "Genre",
         "Album Name",
         "Album Artist(s)",
         "Tracklist Name",
@@ -198,9 +224,15 @@ def write_tracklist_csv(csv_path, list_title, list_tracks, tracklist_artists, re
             album_artists = album_obj.get("artists") or (tracklist_artists or [])
             album_artists_str = "; ".join(album_artists)
 
+            artist_ids = t.get("artists_ids") or []
+            primary_artist_id = artist_ids[0] if artist_ids else None
+            genre = get_primary_genre(spotify, primary_artist_id) if primary_artist_id else ""
+
+
             w.writerow({
                 "Track Name": t["title"],
                 "Artist Name(s)": "; ".join(t["artists"]),
+                "Genre": genre,
                 "Album Name": album_name,
                 "Album Artist(s)": album_artists_str,
                 "Tracklist Name": list_title,
