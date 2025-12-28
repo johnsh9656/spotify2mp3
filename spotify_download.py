@@ -11,6 +11,7 @@ import tempfile
 from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, COMM, TCON
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
+from datetime import datetime
 
 
 # settings
@@ -40,7 +41,7 @@ def get_primary_genre(spotify, artist_id: str) -> str:
             
         artist_genre_cache[artist_id] = genres
 
-        print(f"Fetched genres for artist {artist_id}: {genres}")
+        #print(f"Fetched genres for artist {artist_id}: {genres}")
         return genres[0] if genres else ""
     except Exception:
         artist_genre_cache[artist_id] = []
@@ -139,9 +140,9 @@ def handle_spotify_track(spotify, track_id, output_path="output"):
 
     album = track['album']
     album_title = album['name']
+    album_artists = [a['name'] for a in album['artists']]
     release_date = album['release_date']
     images = album['images']
-
 
     track_list = []
     track_list.append({
@@ -153,6 +154,11 @@ def handle_spotify_track(spotify, track_id, output_path="output"):
         'duration_ms': duration_ms,
         'spotify_id': track_id,
         'spotify_url': track_url,
+        'album': {
+            'name': album_title,
+            'artists': album_artists,
+            'release_date': release_date,
+        },
     })
     
     fd, csv_path = tempfile.mkstemp(suffix=".csv")
@@ -160,7 +166,6 @@ def handle_spotify_track(spotify, track_id, output_path="output"):
 
     try:
         write_tracklist_csv(spotify, csv_path, track_name, track_list, artists_names, release_date)
-        #spotify, csv_path, list_title, list_tracks, tracklist_artists, release_date
         convert_playlist(csv_path, output_path, track_name, numbered_tracks=False)
     finally:
         # delete temp csv file
@@ -195,13 +200,18 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
             'duration_ms': t['duration_ms'],
             'spotify_id': t['id'],
             'spotify_url': t['external_urls']['spotify'],
+            'album': {
+                'name': album_title,
+                'artists': album_artists,
+                'release_date': release_date,
+            },
         })
     
     fd, csv_path = tempfile.mkstemp(suffix=".csv")
     os.close(fd)
 
     try:
-        write_tracklist_csv(spotify, csv_path, album_title, album_tracks, album_artists, release_date)
+        write_tracklist_csv(spotify, csv_path, album_title, album_tracks, album_artists, release_date, sort_mode="album")
         convert_playlist(csv_path, output_path, album_title, numbered_tracks=True)
     finally:
         # delete temp csv file
@@ -211,8 +221,70 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
         except Exception as e:
             print(f"Warning: could not delete temporary file {csv_path}: {e}")
 
+def handle_spotify_playlist(spotify, playlist_id, output_path="output"):
+    playlist = spotify.playlist(playlist_id)
+    playlist_title = playlist['name']
+    playlist_owner = playlist['owner']['display_name'] or playlist['owner']['id']
 
-def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_artists, release_date):
+    # pagination, spotify returns max 50 trackers per request
+    items = []
+    results = spotify.playlist_items(playlist_id, limit=50)
+    while results:
+        items.extend(results['items'])
+        results = spotify.next(results) if results['next'] else None
+
+    playlist_tracks = []
+    added_dates = []
+
+    for item in items:
+        track = item.get('track')
+        if not track:
+            continue # skip local or unavailable tracks
+        
+        added_at = item.get('added_at')
+        if added_at:
+            added_dates.append(added_at)
+        
+        album = track.get('album', {})
+
+        playlist_tracks.append({
+            'track_number': track['track_number'],
+            'disc_number': track['disc_number'],
+            'title': track['name'],
+            'artists': [a['name'] for a in track['artists']],
+            'artists_ids': [a['id'] for a in track['artists']],
+            'duration_ms': track['duration_ms'],
+            'spotify_id': track['id'],
+            'spotify_url': track['external_urls']['spotify'],
+            'album': {
+                'name': album.get('name'),
+                'artists': [a['name'] for a in album.get('artists', [])],
+                'release_date': album.get('release_date'),
+            }
+        })
+    
+    # determine playlist release date as the earliest added_at date
+    playlist_date = ""
+    if added_dates:
+        playlist_date = max(added_dates)[:10]
+    
+    fd, csv_path = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+
+    try:
+        write_tracklist_csv(spotify, csv_path, playlist_title, playlist_tracks, [playlist_owner], playlist_date, sort_mode="keep")
+        convert_playlist(csv_path, output_path, playlist_title, numbered_tracks=True)
+    finally:
+        # delete temp csv file
+        try:
+            if os.path.exists(csv_path):
+                os.remove(csv_path)
+        except Exception as e:
+            print(f"Warning: could not delete temporary file {csv_path}: {e}")
+
+
+def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_artists, release_date, sort_mode: str = "keep"):
+    # sort_mode: "keep" for playlist order, "album" for album order (ie by disc and track number)
     fieldnames = [
         "Track Name",
         "Artist Name(s)",
@@ -229,8 +301,20 @@ def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_ar
         "Spotify Track URL",
     ]
 
-    tracks_sorted = sorted(list_tracks, key=lambda x: (x["disc_number"], x["track_number"]))
     tracklist_artists_str = "; ".join(tracklist_artists or [])
+
+    if sort_mode == "album":
+        #  safe sort even if None
+        def k(x):
+            d = x.get("disc_number") or 0
+            n = x.get("track_number") or 0
+            return (d, n)
+        tracks_sorted = sorted(list_tracks, key=k)
+    else:
+        # keep incoming order (playlist order)
+        tracks_sorted = list_tracks
+
+    tracks_sorted = sorted(list_tracks, key=lambda x: (x["disc_number"], x["track_number"]))
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
@@ -238,7 +322,7 @@ def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_ar
 
         for t in tracks_sorted:
             album_obj = t.get("album") or {}
-            album_name = album_obj.get("name") or list_title
+            album_name = album_obj.get("name") or "Unknown"
             album_artists = album_obj.get("artists") or (tracklist_artists or [])
             album_artists_str = "; ".join(album_artists)
 
@@ -246,21 +330,20 @@ def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_ar
             primary_artist_id = artist_ids[0] if artist_ids else None
             genre = get_primary_genre(spotify, primary_artist_id) if primary_artist_id else ""
 
-
             w.writerow({
-                "Track Name": t["title"],
-                "Artist Name(s)": "; ".join(t["artists"]),
+                "Track Name": t["title"] or "",
+                "Artist Name(s)": "; ".join(t["artists"] or []),
                 "Genre": genre,
                 "Album Name": album_name,
                 "Album Artist(s)": album_artists_str,
                 "Tracklist Name": list_title,
                 "Tracklist Artist(s)": tracklist_artists_str,
                 "Release Date": album_obj.get("release_date") or release_date or "",
-                "Duration (ms)": t["duration_ms"],
-                "Disc Number": t["disc_number"],
-                "Track Number": t["track_number"],
-                "Spotify Track ID": t["spotify_id"],
-                "Spotify Track URL": t["spotify_url"],
+                "Duration (ms)": t["duration_ms"] or 0,
+                "Disc Number": t["disc_number"] or "",
+                "Track Number": t["track_number"] or "",
+                "Spotify Track ID": t["spotify_id"] or "",
+                "Spotify Track URL": t["spotify_url"] or "",
             })
 
 def convert_playlist(csv_path, output_path, tracklist_name, numbered_tracks: bool = True):
@@ -435,8 +518,7 @@ if __name__ == "__main__":
     if content_type == "track":
         handle_spotify_track(spotify, spotify_id, output_path)
     elif content_type == "playlist":
-        #download_spotify_playlist(spotify_url, output_path)
-        print("Playlist download not implemented yet.")
+        handle_spotify_playlist(spotify, spotify_id, output_path)
     elif content_type == "album":
         handle_spotify_album(spotify, spotify_id, output_path)
     
