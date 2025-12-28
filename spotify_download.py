@@ -127,30 +127,48 @@ def parse_spotify_url(url: str):
     spotify_id = m.group(2)
     return content_type, spotify_id
 
-def handle_spotify_track(spotify, track_id):
+def handle_spotify_track(spotify, track_id, output_path="output"):
     track = spotify.track(track_id)
-    album = track["album"]
-    track_info = {
-        'title': track['name'],
-        'artists': [a['name'] for a in track['artists']],
-        'album_title': track['album']['name'],
-        'duration_ms': track['duration_ms'],
-        'explicit': track['explicit'],
-        'spotify_id': track['id'],
-        'spotify_uri': track['uri'],
-        'spotify_url': track['external_urls']['spotify'],
-        'isrc': track.get('external_ids', {}).get('isrc'),
-        'album_info': {
-            'spotify_id': album['id'],
-            'spotify_uri': album['uri'],
-            'spotify_url': album['external_urls']['spotify'],
-            'title': album['name'],
-            'artists': [a['name'] for a in album['artists']],
-            'release_date': album.get('release_date'),
-            'images': album.get('images', []),
-        }
-    }
-    return track_info
+    track_number = track['track_number']
+    disc_number = track['disc_number']
+    track_name = track['name']
+    artists = track['artists']
+    artists_names = [a['name'] for a in artists]
+    duration_ms = track['duration_ms']
+    track_url = track['external_urls']['spotify']
+
+    album = track['album']
+    album_title = album['name']
+    release_date = album['release_date']
+    images = album['images']
+
+
+    track_list = []
+    track_list.append({
+        'track_number': track_number,
+        'disc_number': disc_number,
+        'title': track_name,
+        'artists': artists_names,
+        'artists_ids': [a['id'] for a in artists],
+        'duration_ms': duration_ms,
+        'spotify_id': track_id,
+        'spotify_url': track_url,
+    })
+    
+    fd, csv_path = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+
+    try:
+        write_tracklist_csv(spotify, csv_path, track_name, track_list, artists_names, release_date)
+        #spotify, csv_path, list_title, list_tracks, tracklist_artists, release_date
+        convert_playlist(csv_path, output_path, track_name, numbered_tracks=False)
+    finally:
+        # delete temp csv file
+        try:
+            if os.path.exists(csv_path):
+                os.remove(csv_path)
+        except Exception as e:
+            print(f"Warning: could not delete temporary file {csv_path}: {e}")
 
 def handle_spotify_album(spotify, album_id, output_path="output"):
     album = spotify.album(album_id)
@@ -183,8 +201,8 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
     os.close(fd)
 
     try:
-        write_tracklist_csv(csv_path, album_title, album_tracks, album_artists, release_date)
-        convert_playlist(csv_path, output_path, album_title)
+        write_tracklist_csv(spotify, csv_path, album_title, album_tracks, album_artists, release_date)
+        convert_playlist(csv_path, output_path, album_title, numbered_tracks=True)
     finally:
         # delete temp csv file
         try:
@@ -194,7 +212,7 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
             print(f"Warning: could not delete temporary file {csv_path}: {e}")
 
 
-def write_tracklist_csv(csv_path, list_title, list_tracks, tracklist_artists, release_date):
+def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_artists, release_date):
     fieldnames = [
         "Track Name",
         "Artist Name(s)",
@@ -245,7 +263,7 @@ def write_tracklist_csv(csv_path, list_title, list_tracks, tracklist_artists, re
                 "Spotify Track URL": t["spotify_url"],
             })
 
-def convert_playlist(csv_path, output_path, tracklist_name):
+def convert_playlist(csv_path, output_path, tracklist_name, numbered_tracks: bool = True):
     def normalize(text: str) -> str:
         return re.sub(r"[^\w\s]", "", text.lower())
     
@@ -342,7 +360,10 @@ def convert_playlist(csv_path, output_path, tracklist_name):
                     search_spec = f"ytsearch1:{q}"
                     
                     file_title = safe_track_name or f"Track_{i}"
-                    base = f"{i:03d} - {file_title}" + (f" - {variant}" if variant else "")                
+                    if (numbered_tracks):
+                        base = f"{i:03d} - {file_title}" + (f" - {variant}" if variant else "")                
+                    else:
+                        base = f"{file_title}" + (f" - {variant}" if variant else "")
                     outtmpl = os.path.join(output_dir, base + ".%(ext)s")
 
                     try:
@@ -412,8 +433,7 @@ if __name__ == "__main__":
 
 
     if content_type == "track":
-        #download_spotify_track(spotify_url, output_path)
-        print("Track download not implemented yet.")
+        handle_spotify_track(spotify, spotify_id, output_path)
     elif content_type == "playlist":
         #download_spotify_playlist(spotify_url, output_path)
         print("Playlist download not implemented yet.")
