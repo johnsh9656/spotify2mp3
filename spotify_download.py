@@ -12,6 +12,13 @@ from mutagen.id3 import ID3, TIT2, TPE1, TPE2, TALB, TRCK, TPOS, TDRC, COMM, TCO
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 from datetime import datetime
+import io
+import requests
+from PIL import Image
+from mutagen.id3 import APIC
+from mutagen.id3 import ID3, ID3NoHeaderError
+
+
 
 
 # settings
@@ -25,7 +32,36 @@ def safe_filename(name: str, max_len: int = 120) -> str:
     name = re.sub(r'\s+', ' ', name)
     return name[:max_len].rstrip(' .')
 
-SPOTIFY_RE = re.compile(r"open\.spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", re.IGNORECASE)
+def download_image_bytes(url: str, timeout=20) -> bytes:
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
+def normalize_cover_to_jpeg(img_bytes: bytes, max_size=(600, 600), quality=85) -> bytes:
+    """
+    Converts any image to a reasonably-sized JPEG for iPod friendliness.
+    """
+    im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    im.thumbnail(max_size)  # keeps aspect ratio
+    out = io.BytesIO()
+    im.save(out, format="JPEG", quality=quality, optimize=True)
+    return out.getvalue()
+
+def embed_cover_mp3(file_path: str, jpeg_bytes: bytes):
+    try:
+        tags = ID3(file_path)
+    except ID3NoHeaderError:
+        tags = ID3()
+
+    tags.delall("APIC")
+    tags.add(APIC(
+        encoding=3,
+        mime="image/jpeg",
+        type=3,
+        desc="Cover",
+        data=jpeg_bytes
+    ))
+    tags.save(file_path, v2_version=3)
 
 artist_genre_cache = {}
 def get_primary_genre(spotify, artist_id: str) -> str:
@@ -121,7 +157,7 @@ def find_downloaded_audio(output_dir: str, base_prefix: str):
 
 
 def parse_spotify_url(url: str):
-    m = SPOTIFY_RE.search(url)
+    m = re.compile(r"open\.spotify\.com/(track|playlist|album)/([a-zA-Z0-9]+)", re.IGNORECASE).search(url)
     if not m:
         raise ValueError("Invalid Spotify URL")
     content_type = m.group(1).lower()
@@ -143,6 +179,7 @@ def handle_spotify_track(spotify, track_id, output_path="output"):
     album_artists = [a['name'] for a in album['artists']]
     release_date = album['release_date']
     images = album['images']
+    cover_url = images[0]['url'] if images else ""
 
     track_list = []
     track_list.append({
@@ -159,6 +196,7 @@ def handle_spotify_track(spotify, track_id, output_path="output"):
             'artists': album_artists,
             'release_date': release_date,
         },
+        'cover_url': cover_url,
     })
     
     fd, csv_path = tempfile.mkstemp(suffix=".csv")
@@ -181,6 +219,7 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
     album_artists = [a['name'] for a in album['artists']]
     release_date = album['release_date']
     images = album['images']
+    cover_url = images[0]['url'] if images else ""
 
     # pagination, spotify returns max 50 trackers per request
     tracks = []
@@ -200,11 +239,13 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
             'duration_ms': t['duration_ms'],
             'spotify_id': t['id'],
             'spotify_url': t['external_urls']['spotify'],
+            ''
             'album': {
                 'name': album_title,
                 'artists': album_artists,
                 'release_date': release_date,
             },
+            'cover_url': cover_url,
         })
     
     fd, csv_path = tempfile.mkstemp(suffix=".csv")
@@ -247,6 +288,9 @@ def handle_spotify_playlist(spotify, playlist_id, output_path="output"):
         
         album = track.get('album', {})
 
+        images = album['images']
+        cover_url = images[0]['url'] if images else ""
+
         playlist_tracks.append({
             'track_number': track['track_number'],
             'disc_number': track['disc_number'],
@@ -260,7 +304,8 @@ def handle_spotify_playlist(spotify, playlist_id, output_path="output"):
                 'name': album.get('name'),
                 'artists': [a['name'] for a in album.get('artists', [])],
                 'release_date': album.get('release_date'),
-            }
+            },
+            'cover_url': cover_url,
         })
     
     # determine playlist release date as the earliest added_at date
@@ -299,6 +344,7 @@ def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_ar
         "Track Number",
         "Spotify Track ID",
         "Spotify Track URL",
+        "Cover URL",
     ]
 
     tracklist_artists_str = "; ".join(tracklist_artists or [])
@@ -344,6 +390,7 @@ def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_ar
                 "Track Number": t["track_number"] or "",
                 "Spotify Track ID": t["spotify_id"] or "",
                 "Spotify Track URL": t["spotify_url"] or "",
+                "Cover URL": t.get("cover_url") or "",
             })
 
 def convert_playlist(csv_path, output_path, tracklist_name, numbered_tracks: bool = True):
@@ -467,6 +514,18 @@ def convert_playlist(csv_path, output_path, tracklist_name, numbered_tracks: boo
                         if not final_path:
                             raise RuntimeError("Downloaded file not found after download.")
                         tag_audio_file(final_path, row)
+                        cover_url = (row.get("Cover URL") or "").strip()
+                        if cover_url:
+                            try:
+                                raw = download_image_bytes(cover_url)
+                                jpg = normalize_cover_to_jpeg(
+                                    raw,
+                                    max_size=(500, 500),
+                                    quality=85
+                                )
+                                embed_cover_mp3(final_path, jpg)
+                            except Exception as e:
+                                print(f"    Warning: failed to embed cover art: {e}")
                         print(f"    Downloaded: {info.get('title')}")
                         downloaded.append({'Track Name': track_name, 'Artist Name(s)': artist_primary, 'Album Name': album, 'Track Number': i})
                         success = True
