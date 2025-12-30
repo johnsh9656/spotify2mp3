@@ -32,6 +32,15 @@ def safe_filename(name: str, max_len: int = 120) -> str:
     name = re.sub(r'\s+', ' ', name)
     return name[:max_len].rstrip(' .')
 
+def get_mp3_cover_dimensions(file_path: str):
+    tags = ID3(file_path)
+    apics = tags.getall("APIC")
+    if not apics:
+        return None
+    img_bytes = apics[0].data
+    im = Image.open(io.BytesIO(img_bytes))
+    return im.size, im.format  # (width,height), "JPEG"/"PNG"
+
 def download_image_bytes(url: str, timeout=20) -> bytes:
     r = requests.get(url, timeout=timeout)
     r.raise_for_status()
@@ -44,7 +53,7 @@ def normalize_cover_to_jpeg(img_bytes: bytes, max_size=(600, 600), quality=85) -
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     im.thumbnail(max_size)  # keeps aspect ratio
     out = io.BytesIO()
-    im.save(out, format="JPEG", quality=quality, optimize=True)
+    im.save(out, format="JPEG", quality=quality, optimize=False)
     return out.getvalue()
 
 def embed_cover_mp3(file_path: str, jpeg_bytes: bytes):
@@ -239,7 +248,6 @@ def handle_spotify_album(spotify, album_id, output_path="output"):
             'duration_ms': t['duration_ms'],
             'spotify_id': t['id'],
             'spotify_url': t['external_urls']['spotify'],
-            ''
             'album': {
                 'name': album_title,
                 'artists': album_artists,
@@ -359,8 +367,6 @@ def write_tracklist_csv(spotify, csv_path, list_title, list_tracks, tracklist_ar
     else:
         # keep incoming order (playlist order)
         tracks_sorted = list_tracks
-
-    tracks_sorted = sorted(list_tracks, key=lambda x: (x["disc_number"], x["track_number"]))
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
@@ -554,6 +560,7 @@ def convert_playlist(csv_path, output_path, tracklist_name, numbered_tracks: boo
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
+
     # load config file
     if os.path.exists("config.ini"):
         config = configparser.ConfigParser()
@@ -569,7 +576,7 @@ if __name__ == "__main__":
     spotify = spotipy.Spotify(auth_manager=auth_manager)
 
     # handle user input
-    output_path = "C:/Users/harri/Documents/playlist-maker/test_output"
+    output_path = "your_path"
     spotify_url = input("Enter Spotify URL: ").strip()
     content_type, spotify_id = parse_spotify_url(spotify_url)
 
