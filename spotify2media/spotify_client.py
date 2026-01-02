@@ -189,6 +189,7 @@ def handle_spotify_playlist(spotify, playlist_id, keep_sort, use_album_name=Fals
         genre = get_primary_genre(spotify, primary_artist_id) if primary_artist_id else ""
 
         trackNum += 1
+        use_album_name = not keep_sort
 
         playlist_tracks.append({
             'track_number': keep_sort and trackNum or track['track_number'],
