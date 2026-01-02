@@ -4,7 +4,7 @@ import re
 import os
 import tempfile
 import csv
-from youtube_handler import convert_csv_to_media
+from .youtube_handler import convert_csv_to_media
 
 # cache for artist genres to minimize API calls
 artist_genre_cache = {}
@@ -152,7 +152,7 @@ def handle_spotify_album(spotify, album_id):
     #     except Exception as e:
     #         print(f"Warning: could not delete temporary file {csv_path}: {e}")
 
-def handle_spotify_playlist(spotify, playlist_id, use_album_name=False):
+def handle_spotify_playlist(spotify, playlist_id, keep_sort, use_album_name=False):
     playlist = spotify.playlist(playlist_id)
     playlist_title = playlist['name']
     playlist_owner = playlist['owner']['display_name'] or playlist['owner']['id']
@@ -191,8 +191,8 @@ def handle_spotify_playlist(spotify, playlist_id, use_album_name=False):
         trackNum += 1
 
         playlist_tracks.append({
-            'track_number': trackNum,
-            'disc_number': 1,
+            'track_number': keep_sort and trackNum or track['track_number'],
+            'disc_number': keep_sort and 1 or track['disc_number'] ,
             'title': track['name'],
             'artists': artists,
             'artists_ids': artist_ids,
@@ -230,7 +230,7 @@ def handle_spotify_playlist(spotify, playlist_id, use_album_name=False):
     #         print(f"Warning: could not delete temporary file {csv_path}: {e}")
 
 
-def convert_from_spotify_url(client_id, client_secret, url: str):
+def convert_from_spotify_url(client_id, client_secret, url: str, sort_mode: str):
     # authenticate with Spotify
     auth_manager = oauth2.SpotifyClientCredentials(client_id=client_id, client_secret=client_secret)
     spotify = spotipy.Spotify(auth_manager=auth_manager)
@@ -241,6 +241,7 @@ def convert_from_spotify_url(client_id, client_secret, url: str):
     elif content_type == "album":
         return handle_spotify_album(spotify, spotify_id)
     elif content_type == "playlist":
-        return handle_spotify_playlist(spotify, spotify_id)
+        keep_sort = sort_mode == "keep"
+        return handle_spotify_playlist(spotify, spotify_id, keep_sort=keep_sort)
     else:
         raise ValueError("Unsupported Spotify content type")

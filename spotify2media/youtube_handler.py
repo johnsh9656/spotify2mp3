@@ -255,5 +255,6 @@ def convert_csv_to_media(csv_path, output_path, tracklist_name, numbered_tracks:
                 writer.writerows(not_found_tracks)
 
         print(f"Download completed. {len(downloaded)} tracks downloaded, {len(not_found_tracks)} not found.")
+        print(f"Tracks donwloaded to {output_dir}")
     except Exception as e:
         print(f"An error occurred: {e}")

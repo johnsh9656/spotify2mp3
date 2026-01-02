@@ -1,6 +1,7 @@
 import os
 import configparser
 from dataclasses import dataclass
+from pathlib import Path
 
 @dataclass
 class SpotifyCreds:
@@ -12,12 +13,15 @@ class SpotifyCreds:
 class Download:
     output_path: str
 
-def load_config(config_file: str = "config.ini"):
-    if not os.path.exists(config_file):
-        raise FileNotFoundError(f"{config_file} file not found. Please create one with your Spotify credentials.")
+def load_config():
+    root = Path(__file__).resolve().parent.parent
+    config_path = root / "config.ini"
+
+    if not config_path.exists():
+        raise FileNotFoundError("config.ini not found")
     
     config = configparser.ConfigParser()
-    config.read(config_file)
+    config.read(config_path)
 
     spotify_creds = SpotifyCreds(
         client_id=config.get("SpotifyCreds", "client_id"),
