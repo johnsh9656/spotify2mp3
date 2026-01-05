@@ -132,8 +132,8 @@ def convert_csv_to_media(csv_path, output_path, tracklist_name, numbered_tracks:
         missing = []
         if not ffmpeg_exe:
             missing.append("ffmpeg")
-        if not yt_dlp_exe:
-            missing.append("yt-dlp")
+        #if not yt_dlp_exe:
+        #    missing.append("yt-dlp")
         if missing:
             raise EnvironmentError(f"Missing required executables: {', '.join(missing)}. Please install them and ensure they are in your system PATH.")
 
