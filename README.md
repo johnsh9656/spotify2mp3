@@ -87,6 +87,7 @@ Downloads the playlist sorted by the tracklist order, without numbering, to `D:/
 
 ## Project Structure
 
+```console
 spotify2mp3/
 ├── spotify2media/              # main Python package (installed as CLI tool)
 │   ├── __init__.py             # marks spotify2media as a Python package, no functionality
@@ -100,6 +101,7 @@ spotify2mp3/
 ├── pyproject.toml              # project metadata, dependencies, CLI entry definition
 ├── requirements.txt            # dependency list for non-CLI / non-editable installs
 └── README.md                   # project overview, setup insturctions, usage, etc...
+```
 
 ---
 
@@ -128,5 +130,6 @@ Each iteration builds on the previous. This section will be updated over time.
 ---
 
 ## License
+
 
 MIT  
