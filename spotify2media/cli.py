@@ -40,6 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not prefix filenames with track numbers"
     )
 
+    p.add_argument(
+        "--cookies-from-browser",
+        default=None,
+        help="Pass browser cookies to yt-dlp, for example 'chrome' or 'edge:Default'"
+    )
+
+    p.add_argument(
+        "--cookies",
+        default=None,
+        help="Path to a Netscape-format cookies.txt file for yt-dlp"
+    )
+
     return p
 
 def run(argv=None) -> int:
@@ -49,6 +61,8 @@ def run(argv=None) -> int:
     creds, download_settings = load_config()
 
     output_path = args.output or download_settings.output_path
+    cookies_from_browser = args.cookies_from_browser or download_settings.cookies_from_browser
+    cookies_file = args.cookies or download_settings.cookies_file
     url = args.url.strip()
 
     # sort_mode
@@ -71,7 +85,14 @@ def run(argv=None) -> int:
 
     try:
         write_tracklist_csv(csv_path, tracklist_title, tracks, tracklist_artists, release_date, sort_mode)
-        convert_csv_to_media(csv_path, output_path, tracklist_title, numbered_tracks)
+        convert_csv_to_media(
+            csv_path,
+            output_path,
+            tracklist_title,
+            numbered_tracks,
+            cookies_from_browser=cookies_from_browser,
+            cookies_file=cookies_file,
+        )
     finally:
         try:
             if os.path.exists(csv_path):

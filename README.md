@@ -29,7 +29,11 @@ username = user     # doesn't affect anything yet
 
 [Download]
 output_path = PATH_TO_DESIRED_OUTPUT_FOLDER
+cookies_from_browser = chrome
+cookies_file = C:\path\to\cookies.txt
 ```
+
+The cookie settings are optional. Use them when YouTube returns age-gate, sign-in, or 403 errors for some search results.
 
 ### CLI / Editable Install
 

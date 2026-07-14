@@ -116,8 +116,21 @@ def find_downloaded_audio(output_dir: str, base_prefix: str):
             candidates.append(os.path.join(output_dir, fn))
     return max(candidates, key=os.path.getmtime) if candidates else None
 
+
+def parse_browser_cookie_spec(spec: str):
+    parts = [part.strip() for part in spec.split(":") if part.strip()]
+    return tuple(parts)
+
 # converts a CSV playlist export to mp3 files using youtube-dl / yt-dlp
-def convert_csv_to_media(csv_path, output_path, tracklist_name, numbered_tracks: bool = True, transcode_mp3: bool = True):    
+def convert_csv_to_media(
+    csv_path,
+    output_path,
+    tracklist_name,
+    numbered_tracks: bool = True,
+    transcode_mp3: bool = True,
+    cookies_from_browser: str | None = None,
+    cookies_file: str | None = None,
+):    
     start_time = time.time()
     output_dir = os.path.join(output_path, safe_filename(tracklist_name))
     os.makedirs(output_dir, exist_ok=True)
@@ -152,6 +165,10 @@ def convert_csv_to_media(csv_path, output_path, tracklist_name, numbered_tracks:
                 
                 "no_warnings": True,
             }
+            if cookies_from_browser:
+                opts["cookiesfrombrowser"] = parse_browser_cookie_spec(cookies_from_browser)
+            if cookies_file:
+                opts["cookiefile"] = cookies_file
             if mp3:
                 opts["postprocessors"] = [
                     {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
@@ -209,7 +226,7 @@ def convert_csv_to_media(csv_path, output_path, tracklist_name, numbered_tracks:
                     
                     video_duration = info.get('duration')
                     if duration_s and video_duration:
-                        if abs(video_duration - duration_s) > 30:
+                        if abs(video_duration - duration_s) > 120:
                             print(f"    Skipping due to duration mismatch (expected {duration_s}s, got {video_duration}s)")
                             continue
                     

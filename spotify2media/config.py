@@ -12,6 +12,8 @@ class SpotifyCreds:
 @dataclass
 class Download:
     output_path: str
+    cookies_from_browser: str | None = None
+    cookies_file: str | None = None
 
 def _default_config_path() -> Path:
     # based on windows-standard config location : %APPDATA%/playlist-maker/config.ini
@@ -53,7 +55,9 @@ def load_config():
     )
 
     download_settings = Download(
-        output_path=config.get("Download", "output_path")
+        output_path=config.get("Download", "output_path"),
+        cookies_from_browser=config.get("Download", "cookies_from_browser", fallback=None),
+        cookies_file=config.get("Download", "cookies_file", fallback=None)
     )
 
     return spotify_creds, download_settings
